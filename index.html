@@ -2811,6 +2811,36 @@ const MODELOS_INICIANTE = {
   }
 };
 
+/* Para as demais divisões, as vagas saem dos grupos que cada sessão declara
+   em DIVISOES. Composto antes de isolado, e um teto por grupo para que uma
+   sessão de um músculo só não vire oito exercícios iguais. */
+const VAGAS_GRUPO = {
+  'Peito':      [{p:'empurrar-h',t:'composto'},{t:'isolado'},{p:'empurrar-h'},{}],
+  'Costas':     [{p:'puxar-v'},{p:'puxar-h'},{p:'puxar-h'},{}],
+  'Ombro':      [{p:'empurrar-v'},{t:'isolado'},{p:'puxar-h'},{}],
+  'Quadríceps': [{p:'agachar'},{t:'isolado'},{p:'agachar'},{}],
+  'Posterior':  [{t:'isolado'},{p:'hinge'},{}],
+  'Glúteo':     [{p:'hinge'},{t:'isolado'},{}],
+  'Bíceps':[{},{}], 'Tríceps':[{},{}], 'Panturrilha':[{},{}], 'Core':[{},{}],
+  'Trapézio':[{}], 'Antebraço':[{}], 'Adutor':[{}], 'Condicionamento':[{}]
+};
+const _GRUPOS_GRANDES=['Peito','Costas','Quadríceps','Posterior','Glúteo','Ombro'];
+function vagasDaSessao(grupos){
+  const unico=grupos.length===1, vagas=[];
+  const grande=g=>_GRUPOS_GRANDES.includes(g);
+  const teto=g=> unico ? 4 : grande(g) ? 3 : 2;
+  const rodada=(filtro,k)=>{ for(const g of grupos){ if(!filtro(g)) continue;
+    const l=VAGAS_GRUPO[g]||[{}]; if(k<l.length && k<teto(g)) vagas.push({g,...l[k]}); } };
+  const pequeno=g=>!grande(g);
+  rodada(grande,0); rodada(grande,1); rodada(pequeno,0); rodada(grande,2); rodada(pequeno,1); rodada(grande,3);
+  return vagas;
+}
+function modeloDaDivisao(div){
+  return MODELOS_INICIANTE[div] || Object.fromEntries(DIVISOES[div].seq.map(s=>[s.n, vagasDaSessao(s.g)]));
+}
+/* Divisão padrão para quem está começando: o que o corpo absorve bem. */
+const divisaoIniciante = dias => (+dias)>=4 ? 'upperlower' : 'fullbody';
+
 /* "50 minutos", "1 hora", "1h30", "meia hora", "40" -> minutos. */
 function minutosDisponiveis(txt){
   const s=String(txt||'').toLowerCase().replace(',','.');
@@ -2857,11 +2887,11 @@ function escolherExercicio(vaga, usadosSessao, usadosPlano, extraExcluir){
 
 function gerarSerieInicial(){
   const p=S.perfil;
-  const div = (+p.dias)>=4 ? 'upperlower' : 'fullbody';
+  const div = DIVISOES[p.divisao] ? p.divisao : divisaoIniciante(p.dias);
   const min = minutosDisponiveis(p.tempo);
   const n = min<=30?4 : min<=45?5 : min<=60?6 : 7;
   const usadosPlano=new Set();
-  const sessoes=Object.entries(MODELOS_INICIANTE[div]).map(([nome,vagas])=>{
+  const sessoes=Object.entries(modeloDaDivisao(div)).map(([nome,vagas])=>{
     const usados=new Set(), lista=[];
     for(const v of vagas){
       if(lista.length>=n) break;
@@ -2869,6 +2899,16 @@ function gerarSerieInicial(){
       if(!r) continue;
       usados.add(r.e.n); usadosPlano.add(r.e.n);
       lista.push({nome:r.e.n, alerta:r.alerta});
+    }
+    /* Se as lesões ou a falta de equipamento esvaziam a sessão, completa com
+       grupos que raramente conflitam e marca como complemento. */
+    const minimo=Math.min(3,n);
+    for(const v of [{g:'Core'},{g:'Glúteo',p:'hinge'},{g:'Panturrilha'},{g:'Adutor'},{g:'Core'},{g:'Glúteo'},{g:'Posterior'}]){
+      if(lista.length>=minimo) break;
+      const r=escolherExercicio(v,usados,usadosPlano);
+      if(!r) continue;
+      usados.add(r.e.n); usadosPlano.add(r.e.n);
+      lista.push({nome:r.e.n, alerta:r.alerta, complemento:true});
     }
     return {nome, exercicios:lista};
   });
@@ -2909,8 +2949,9 @@ function metaIniciante(nome, fase){
 /* Avisos que dependem do perfil: aparecem só para quem eles importam. */
 function avisosSerie(serie){
   const p=S.perfil, c=p.condicoes||[], av=[];
-  const forca = serie.divisao==='upperlower' ? 4 : Math.min(+p.dias||3,3);
-  const extra = (+p.dias||0) - forca;
+  const D=DIVISOES[serie.divisao], nSess=D.seq.length, nd=+p.dias||0;
+  if(!/Iniciante|Todos/.test(D.nivel))
+    av.push({t:'w',x:`A ${D.nome} costuma servir melhor a quem já treina há algum tempo (nível ${D.nivel.toLowerCase()}). Montei a série para ela mesmo assim, com exercícios e volume de iniciante. Se a rotina pesar, Full body ou Upper / Lower são as opções mais tranquilas para começar.`});
   if(p.gestacao && p.gestacao!=='nao')
     av.push({t:'a',x:'Começar a treinar na gestação ou no pós-parto costuma ser recomendado, mas só com liberação do seu obstetra. Leve esta série à consulta antes da primeira sessão.'});
   if(c.some(k=>['cardiaca','hipertensao','diabetes','renal'].includes(k)))
@@ -2921,20 +2962,37 @@ function avisosSerie(serie){
     av.push({t:'',x:'A escolha priorizou máquinas e movimentos com apoio, sem impacto, para reduzir o risco de queda.'});
   if(serie.sessoes.some(s=>s.exercicios.some(x=>x.alerta)))
     av.push({t:'w',x:'Alguns exercícios marcados com "cautela" foram os únicos possíveis com o seu equipamento. Leia o aviso de cada um na hora de treinar.'});
-  if(extra>0)
-    av.push({t:'g',x:`Você disse que consegue ${p.dias} dias por semana. A série usa ${forca} para musculação, que é o que o corpo absorve bem no começo. Nos outros ${extra}, uma caminhada leve de 20 a 30 minutos conta muito.`});
-  if(+p.dias<=2)
-    av.push({t:'',x:'Com 2 dias por semana, as sessões vão se alternando: A, B, C, A, B... Assim todos os exercícios aparecem ao longo de poucas semanas.'});
+  const comComplemento=serie.sessoes.filter(s=>s.exercicios.some(x=>x.complemento));
+  if(comComplemento.length)
+    av.push({t:'w',x:`Em ${comComplemento.map(s=>s.nome).join(', ')}, quase todos os exercícios dos músculos do dia entram em conflito com as lesões que você marcou ou pedem equipamento que você não tem. Completei com exercícios de outros grupos, marcados como "complemento". No seu caso, Full body costuma encaixar melhor, porque mistura os grupos em toda sessão.`});
+  if(nd>nSess)
+    av.push({t:'g',x:`Você disse que consegue ${nd} dias por semana e a ${D.nome} tem ${nSess} sessões${serie.divisao===divisaoIniciante(nd)?', que é o que o corpo absorve bem no começo':''}. Nos outros ${nd-nSess} dias, uma caminhada leve de 20 a 30 minutos conta muito.`});
+  if(nd>0 && nd<nSess)
+    av.push({t:'',x:`A ${D.nome} tem ${nSess} sessões e você treina ${nd} dias por semana, então elas vão se alternando na ordem (${D.seq.map(s=>s.n.split(' — ')[0]).join(', ')}, e de novo) e cada semana começa de onde a anterior parou.`});
   return av;
 }
 
 /* Gera a série se o usuário é iniciante e ainda não tem uma. Também alinha a
    divisão do perfil à da série, para "próxima sessão" bater com ela. */
+/* Tudo que define a série. Se qualquer item mudar (em Você, em Plano ou no
+   onboarding), a série é refeita. A semana da adaptação é preservada, para a
+   pessoa não voltar à estaca zero só porque trocou de divisão. */
+function assinaturaSerie(p){
+  return JSON.stringify([p.divisao, minutosDisponiveis(p.tempo), [...(p.equip||[])].sort(),
+    [...(p.condicoes||[])].sort(), p.gestacao||'nao', (+p.idade)>=60]);
+}
 function garantirSerie(){
   const p=S&&S.perfil;
-  if(!p || p.jatreina!=='nao' || p.semSerie) return null;
-  if(!S.serie){ S.serie=gerarSerieInicial(); save(); }
-  if(p.divisao!==S.serie.divisao){ p.divisao=S.serie.divisao; save(); }
+  if(!p || p.jatreina!=='nao') return null;
+  if(!DIVISOES[p.divisao]) p.divisao=divisaoIniciante(p.dias);
+  const ass=assinaturaSerie(p);
+  if(!S.serie || S.serie.assinatura!==ass){
+    const criada=S.serie&&S.serie.criada;
+    S.serie=gerarSerieInicial();
+    if(criada) S.serie.criada=criada;
+    S.serie.assinatura=ass;
+    save();
+  }
   return S.serie;
 }
 
@@ -2949,9 +3007,9 @@ function trocarExercicioSerie(si, ei){
   if(!r){ /* esgotou: recomeça o ciclo de alternativas */
     r=escolherExercicio({g:e.g,p:e.p}, new Set([...usados].filter(n=>n!==atual.nome)), new Set(), new Set([atual.nome]));
     if(!r) return;
-    sess.exercicios[ei]={nome:r.e.n, alerta:r.alerta, trocados:[]};
+    sess.exercicios[ei]={nome:r.e.n, alerta:r.alerta, trocados:[], complemento:atual.complemento};
   } else {
-    sess.exercicios[ei]={nome:r.e.n, alerta:r.alerta, trocados:[...vistos]};
+    sess.exercicios[ei]={nome:r.e.n, alerta:r.alerta, trocados:[...vistos], complemento:atual.complemento};
   }
   save();
 }
@@ -3241,7 +3299,7 @@ function onboarding(){
       equip:d.equip||EQUIPAMENTOS.map(x=>x.k), restricoes:d.restricoes||[],
       condicoes:d.condicoes||[], gestacao:d.gestacao||'nao', criado:hoje()};
     S.pesos.push({data:hoje(),peso:+d.peso});
-    if(S.perfil.jatreina==='nao'){ S.serie=null; garantirSerie(); S.tab='plano'; } else S.tab='hoje';
+    if(S.perfil.jatreina==='nao'){ S.perfil.divisao=divisaoIniciante(S.perfil.dias); S.serie=null; garantirSerie(); S.tab='plano'; } else S.tab='hoje';
     save(); render(); };
 }
 
@@ -3456,7 +3514,7 @@ Peso: ${S.pesos.slice(-5).map(x=>fmtData(x.data)+' '+x.peso+'kg').join(', ')||'�
 Volume 7 dias por grupo: ${Object.entries(vol).filter(([,n])=>n>0).map(([g,n])=>g+' '+n.toFixed(1)).join(', ')||'—'}.
 ${(()=>{const s=S.serie; if(!s||p.jatreina!=='nao') return '';
   const f=faseSerie(s);
-  return 'Série inicial sugerida pelo app (usuário iniciante, semana '+f.semana+', fase '+f.nome+', '+f.series+' séries por exercício, RIR '+f.rir+'): '
+  return 'Série inicial sugerida pelo app para a divisão '+DIVISOES[s.divisao].nome+' (usuário iniciante, semana '+f.semana+', fase '+f.nome+', '+f.series+' séries por exercício, RIR '+f.rir+'): '
     + s.sessoes.map(x=>x.nome+': '+x.exercicios.map(e=>e.nome).join(', ')).join(' | ')
     + '. Ela foi montada pelo app com base no equipamento, nas lesões e no tempo informados; ao sugerir trocas, mantenha o mesmo padrão de movimento e o nível iniciante.\n';})()}Últimos treinos:
 ${ult}`;
@@ -3503,11 +3561,8 @@ function telaCoach(){
 
 /* ---- PLANO (divisões, periodização, segurança, biblioteca) -------------- */
 function htmlSerieInicial(){
-  if(S.perfil.jatreina==='nao' && S.perfil.semSerie)
-    return `<div class="card"><span class="tiny">Série inicial</span>
-      <p class="small muted" style="margin:8px 0 12px">Você trocou para outra divisão, então a série inicial foi desligada.</p>
-      <button class="btn small ghost" data-regerar="1">Voltar a usar a série inicial</button></div>`;
   const s=garantirSerie(); if(!s) return '';
+  const D=DIVISOES[s.divisao], houveTroca=s.sessoes.some(x=>x.exercicios.some(e=>(e.trocados||[]).length));
   const f=faseSerie(s);
   return `<div class="card hero">
     <div class="between"><span class="tiny">Sua série inicial</span><span class="mono small muted">semana ${f.semana}</span></div>
@@ -3515,12 +3570,13 @@ function htmlSerieInicial(){
     <p class="small" style="margin:0;opacity:.9">${f.texto}</p>
   </div>
   <div class="card">
-    <p class="small muted" style="margin:0 0 4px">Montada a partir das suas respostas: ${S.perfil.dias} dias por semana, cerca de ${s.minutos} minutos por dia${(S.perfil.equip||[]).length?'':', só com o peso do corpo'}. São ${s.porSessao} exercícios por sessão, contando 5 a 8 minutos de aquecimento.</p>
+    <div class="between" style="margin-bottom:6px"><span class="small" style="font-weight:600">Divisão: ${D.nome}</span><span class="pill">${D.seq.length} sessões</span></div>
+    <p class="small muted" style="margin:0 0 4px">Montada para essa divisão, com cerca de ${s.minutos} minutos por sessão${(S.perfil.equip||[]).length?'':' e só o peso do corpo'}: até ${s.porSessao} exercícios em cada uma, contando 5 a 8 minutos de aquecimento. Escolha outra divisão abaixo ou em Você e a série acompanha.</p>
     ${s.sessoes.map((sess,si)=>`<hr>
       <div class="between"><h3>${sess.nome}</h3>${sess.nome===proximaSessao()?'<span class="pill g">próxima</span>':''}</div>
       ${sess.exercicios.map((x,ei)=>{const m=metaIniciante(x.nome,f), info=EXERCICIOS.find(e=>e.n===x.nome)||{};
         return `<div class="item"><div style="min-width:0">
-          <div class="small" style="font-weight:600">${x.nome} ${x.alerta?'<span class="pill w">cautela</span>':''}</div>
+          <div class="small" style="font-weight:600">${x.nome} ${x.alerta?'<span class="pill w">cautela</span>':''}${x.complemento?' <span class="pill n">complemento</span>':''}</div>
           <div class="small muted">${info.g||''} · ${info.eq||''}</div>
           <div class="mono small" style="margin-top:3px">${m.texto}</div></div>
           <button class="btn small ghost" data-trocar="${si}|${ei}" aria-label="Trocar ${x.nome}">Trocar</button></div>`;}).join('')}`).join('')}
@@ -3531,8 +3587,8 @@ function htmlSerieInicial(){
   ${avisosSerie(s).map(a=>`<div class="note ${a.t} small" style="margin-bottom:10px">${a.x}</div>`).join('')}
   <div class="row" style="margin:4px 0 22px">
     <button class="btn small primary" data-carregar="1">Começar a próxima sessão</button>
-    <button class="btn small ghost" data-regerar="1">Gerar de novo</button></div>
-  <p class="small muted" style="margin:-12px 0 22px">Mudou os dias, o equipamento ou alguma lesão em Você? Toque em "Gerar de novo".</p>`;
+    ${houveTroca?'<button class="btn small ghost" data-regerar="1">Desfazer minhas trocas</button>':''}</div>
+  <p class="small muted" style="margin:-12px 0 22px">A série se ajusta sozinha quando você muda a divisão, o equipamento, o tempo, alguma lesão ou a gestação.</p>`;
 }
 
 function telaPlano(){
@@ -3708,7 +3764,7 @@ function telaVoce(){
     const k=b.dataset.rsv, at=S.perfil.restricoes||[];
     S.perfil.restricoes = at.includes(k)?at.filter(x=>x!==k):[...at,k]; save(); telaVoce();};
   view.querySelector('#objv').onclick=e=>{const b=e.target.closest('.chip'); if(!b)return; S.perfil.objetivo=b.dataset.obj; save(); render();};
-  view.querySelector('#divv').onchange=e=>{S.perfil.divisao=e.target.value; if(S.serie&&e.target.value!==S.serie.divisao){S.serie=null; S.perfil.semSerie=true;} rascunho=null; save(); render();};
+  view.querySelector('#divv').onchange=e=>{S.perfil.divisao=e.target.value; rascunho=null; save(); render();};
   view.querySelector('#diasv').onchange=e=>{S.perfil.dias=+e.target.value||1; save(); telaVoce();};
   view.querySelector('#export').onclick=()=>{const a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([JSON.stringify(S,null,2)],{type:'application/json'}));
@@ -3728,7 +3784,7 @@ view.addEventListener('click',e=>{
   if(tro){ const [si,ei]=tro.dataset.trocar.split('|').map(Number); trocarExercicioSerie(si,ei);
     const y=window.scrollY; telaPlano(); window.scrollTo(0,y); return; }
   const reg=e.target.closest('[data-regerar]');
-  if(reg){ S.serie=null; S.perfil.semSerie=false; garantirSerie(); rascunho=null; render(); return; }
+  if(reg){ const c=S.serie&&S.serie.criada; S.serie=null; garantirSerie(); if(c){S.serie.criada=c; save();} rascunho=null; render(); return; }
   const add=e.target.closest('[data-add]'); if(add){rascunho.exercicios.push({nome:add.dataset.add,series:[]});telaTreino.q='';telaTreino();return;}
   const del=e.target.closest('[data-del]'); if(del){rascunho.exercicios.splice(+del.dataset.del,1);telaTreino();return;}
   const usar=e.target.closest('[data-usar]'); if(usar){S.perfil.divisao=usar.dataset.usar;rascunho=null;save();render();return;}
