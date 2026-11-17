@@ -3558,7 +3558,9 @@ function telaTreino(){
 
 /* Gramas em pt-BR: uma casa decimal abaixo de 10 g, inteiro acima. */
 const fmtG = x => { const v = x<10 ? Math.round(x*10)/10 : Math.round(x); return String(v).replace('.',','); };
-const linhaMacros = (k,p,c,g) => `${Math.round(k)} kcal · P ${fmtG(p)} g · C ${fmtG(c)} g · G ${fmtG(g)} g`;
+/* Espaços inquebráveis dentro de cada item: a linha só quebra entre os itens. */
+const linhaMacros = (k,p,c,g) => [`${Math.round(k)} kcal`,`P ${fmtG(p)} g`,`C ${fmtG(c)} g`,`G ${fmtG(g)} g`]
+  .map(s=>s.replace(/ /g,'\u00a0')).join(' · ');
 function blocoMacros(a){
   return `<div class="macros" aria-label="Valores por 100 gramas">
     <div class="mac k"><b>${Math.round(a.k)}</b><span>kcal</span></div>
@@ -3623,7 +3625,7 @@ function telaComida(){
   view.querySelectorAll('[data-gram]').forEach(inp=>{
     const a=res[+inp.dataset.ia], out=view.querySelector(`[data-prev="${inp.dataset.ia}"]`);
     inp.oninput=()=>{ const g=parseFloat(String(inp.value).replace(',','.'));
-      out.textContent = g>0 ? `${fmtG(g)} g = ${linhaMacros(a.k*g/100,a.p*g/100,a.c*g/100,a.g*g/100)}` : ''; };
+      out.textContent = g>0 ? `${fmtG(g)}\u00a0g = ${linhaMacros(a.k*g/100,a.p*g/100,a.c*g/100,a.g*g/100)}` : ''; };
     inp.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); view.querySelector(`[data-eat="${CSS.escape(a.n)}"]`).click(); } };
   });
 }
