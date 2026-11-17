@@ -201,6 +201,17 @@ nav.tabs .wrapn{max-width:540px;margin:0 auto;display:grid;grid-template-columns
 .steps i.on{background:var(--grad)}
 .abre{text-align:center;padding:6px 0 18px}
 .abre .mark{height:84px;width:84px;margin:0 auto 14px}
+.alim{padding:13px 0;border-bottom:1px solid var(--line2)}
+.alim:last-child{border-bottom:0}
+.macros{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:10px}
+.mac{background:var(--line2);border-radius:10px;padding:7px 8px 6px;line-height:1.15;border-left:3px solid var(--line)}
+.mac b{display:block;font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;font-size:13.5px;font-weight:600;color:var(--ink);white-space:nowrap}
+.mac span{font-size:10px;color:var(--muted)}
+.mac.p{border-left-color:var(--blue-d)} .mac.c{border-left-color:var(--blue)} .mac.g{border-left-color:var(--green)}
+.medida{display:inline-flex;flex-direction:column;align-items:flex-start;gap:2px;border-radius:12px;text-align:left}
+.medida small{font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:500;opacity:.85}
+.prev{margin-top:8px;color:var(--green-d)}
+.prev:empty{display:none}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -2665,14 +2676,17 @@ const F = {
   /* Corte proporcional ao gasto: 400 kcal são 14% para quem gasta 2800 e 27%
      para quem gasta 1500. Faixa de 300 a 500 do arquivo de parâmetros, aplicada
      como percentual, com piso na TMB para nunca prescrever abaixo do basal. */
-  ajuste:(tdee,obj,idade)=>{
-    if(obj==='cutting'){ const pct = idade>=60?0.15:0.18;
-      return -Math.round(Math.min(500,Math.max(150,tdee*pct))); }
-    if(obj==='bulking'){ return  Math.round(Math.min(400,Math.max(120,tdee*0.12))); }
+  /* ret = ajuste de retorno: quem já treinou e parou recupera músculo rápido
+     (memória muscular), então corte e superávit ficam menores e a proteína
+     sobe nas primeiras semanas. */
+  ajuste:(tdee,obj,idade,ret)=>{
+    if(obj==='cutting'){ const pct = ret ? 0.12 : idade>=60?0.15:0.18;
+      return -Math.round(Math.min(ret?400:500,Math.max(150,tdee*pct))); }
+    if(obj==='bulking'){ return  Math.round(Math.min(ret?300:400,Math.max(120,tdee*(ret?0.08:0.12)))); }
     return 0;
   },
-  meta:(tdee,obj,tmb,idade)=> Math.max(tmb, tdee + F.ajuste(tdee,obj,idade)),
-  macros:(p,k,o)=>{ const prot=Math.round(p*(o==='cutting'?2.2:1.8)), gord=Math.round(p*0.8);
+  meta:(tdee,obj,tmb,idade,ret)=> Math.max(tmb, tdee + F.ajuste(tdee,obj,idade,ret)),
+  macros:(p,k,o,ret)=>{ const prot=Math.round(p*(o==='cutting'?2.2:ret?2.0:1.8)), gord=Math.round(p*0.8);
     return {prot,gord,carb:Math.max(0,Math.round((k-prot*4-gord*9)/4))}; },
   epley:(c,r)=> c*(1+r/30),
   imc:(p,a)=> p/Math.pow(a/100,2)
@@ -2708,18 +2722,31 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 const DIAS=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 
 /* ---------- DERIVADOS --------------------------------------------------- */
+/* Janela do ajuste de retorno: 6 semanas a partir do onboarding. */
+function ajusteRetorno(p){
+  if(!p || p.jatreina!=='parou') return {ativo:false};
+  const semana=Math.floor(Math.max(0,(new Date(hoje())-new Date(p.criado||hoje()))/864e5)/7)+1;
+  return {ativo:semana<=6, semana};
+}
 function metasDoDia(){
   const p=S.perfil, tmb=F.tmb(p.sexo,p.peso,p.altura,p.idade), tdee=F.tdee(tmb,p.dias);
   const g=guardaNutricional();
   const obj = g.trava && p.objetivo==='cutting' ? 'manutencao' : p.objetivo;
-  const kcal=F.meta(tdee,obj,tmb,p.idade);
+  const ret=ajusteRetorno(p);
+  const kcal=F.meta(tdee,obj,tmb,p.idade,ret.ativo);
   const delta=Math.round(kcal-tdee);
   /* Amamentação eleva a demanda energética; não é lugar para corte. */
   const extra = p.gestacao==='amamentando' ? 400 : p.gestacao==='gestante' ? 250 : 0;
   const alvo = kcal + extra;
   return {tmb:Math.round(tmb),tdee:Math.round(tdee),kcal:Math.round(alvo),
-          objAplicado:obj, delta, extra, pisoAtingido:Math.round(kcal)<=Math.round(tmb),
-          ...F.macros(p.peso,alvo,obj)};
+          objAplicado:obj, delta, extra, pisoAtingido:Math.round(kcal)<=Math.round(tmb), retorno:ret,
+          ...F.macros(p.peso,alvo,obj,ret.ativo)};
+}
+function textoAjusteRetorno(m){
+  const base='Como você já treinou, seu corpo recupera músculo bem mais rápido que o de um iniciante, a chamada memória muscular. ';
+  if(m.objAplicado==='cutting') return base+'Isso favorece a recomposição, que é perder gordura e recuperar massa ao mesmo tempo. Por isso o déficit está menor que o padrão (12% do gasto, em vez de 18%) e a proteína mais alta. Depois da 6ª semana a meta volta ao padrão.';
+  if(m.objAplicado==='bulking') return base+'A massa volta mesmo perto da manutenção, então um superávit grande viraria mais gordura que músculo. Por isso o superávit está em 8% do gasto, em vez de 12%, e a proteína em 2,0 g/kg. Depois da 6ª semana a meta volta ao padrão.';
+  return base+'Na manutenção, ela já faz boa parte do trabalho. A proteína fica em 2,0 g/kg nessas 6 primeiras semanas para dar suporte à recuperação de massa.';
 }
 function totalDia(data){
   const t={k:0,p:0,c:0,g:0};
@@ -2853,6 +2880,27 @@ function minutosDisponiveis(txt){
   return m ? Math.max(10, +m[1]) : 45;
 }
 
+/* Retorno com bagagem: quem treinou 6 meses ou mais lembra do movimento.
+   Libera compostos livres que ficam fora da série de quem nunca treinou;
+   depois de mais de um ano parado, segura os de força relativa (barra fixa,
+   paralelas) e os de mobilidade exigente. */
+const retornoExperiente = p => !!(p && p.jatreina==='parou' && p.expAntes && p.expAntes!=='<6m');
+const _TECNICO_RETORNO = /levantamento terra|terra sumô|terra com trap|bom dia|nordic|glute-ham|sissy|com peso|rosca 21|ab wheel|kettlebell swing|burpee|corda naval|empurrar trenó|com salto|cossaco|canivete|hollow|pendura|farmer|remada alta|encolhimento escapular|pular corda|mountain climber/i;
+const _TECNICO_RETORNO_LONGO = new RegExp(_TECNICO_RETORNO.source+'|barra fixa|mergulho em paralelas|agachamento frontal|remada yates|remada meadows','i');
+function filtroTecnico(){
+  const p=S.perfil;
+  if(!retornoExperiente(p)) return _TECNICO_INICIANTE;
+  return p.parado==='1a+' ? _TECNICO_RETORNO_LONGO : _TECNICO_RETORNO;
+}
+function ordemEquipamento(){
+  const p=S.perfil;
+  return (retornoExperiente(p) && p.expAntes==='2a+' && p.parado!=='1a+')
+    ? ['halteres','barra','máquina','polia','peso corporal','elástico','anilha','kettlebell']
+    : _ORDEM_EQ_INICIANTE;
+}
+const rotuloSerie = maiusc => { const t = S&&S.perfil&&S.perfil.jatreina==='parou' ? 'série de retorno' : 'série inicial';
+  return maiusc ? t[0].toUpperCase()+t.slice(1) : t; };
+
 function _equipDoPerfil(){
   const p=S.perfil;
   return [...(p.equip||EQUIPAMENTOS.map(x=>x.k)), ...EQ_LIVRE];
@@ -2863,7 +2911,8 @@ function _equipDoPerfil(){
    (contraindicação) nunca entra. */
 function escolherExercicio(vaga, usadosSessao, usadosPlano, extraExcluir){
   const eq=_equipDoPerfil();
-  const base=EXERCICIOS.filter(e=>e.g===vaga.g && eq.includes(e.eq) && !_TECNICO_INICIANTE.test(e.n)
+  const tec=filtroTecnico(), ordemEq=ordemEquipamento();
+  const base=EXERCICIOS.filter(e=>e.g===vaga.g && eq.includes(e.eq) && !tec.test(e.n)
     && !usadosSessao.has(e.n) && !(extraExcluir&&extraExcluir.has(e.n)));
   const niveis=[
     base.filter(e=>(!vaga.p||e.p===vaga.p) && (!vaga.t||e.t===vaga.t)),
@@ -2871,8 +2920,8 @@ function escolherExercicio(vaga, usadosSessao, usadosPlano, extraExcluir){
     base
   ];
   const ordenar=l=>l.slice().sort((a,b)=>
-    (_ORDEM_EQ_INICIANTE.indexOf(a.eq)*10 + (usadosPlano.has(a.n)?1:0)) -
-    (_ORDEM_EQ_INICIANTE.indexOf(b.eq)*10 + (usadosPlano.has(b.n)?1:0)));
+    (ordemEq.indexOf(a.eq)*10 + (usadosPlano.has(a.n)?1:0)) -
+    (ordemEq.indexOf(b.eq)*10 + (usadosPlano.has(b.n)?1:0)));
   for(const l of niveis){
     const limpos=ordenar(l.filter(e=>alertasExercicio(e).length===0));
     if(limpos.length) return {e:limpos[0], alerta:false};
@@ -2889,7 +2938,10 @@ function gerarSerieInicial(){
   const p=S.perfil;
   const div = DIVISOES[p.divisao] ? p.divisao : divisaoIniciante(p.dias);
   const min = minutosDisponiveis(p.tempo);
-  const n = min<=30?4 : min<=45?5 : min<=60?6 : 7;
+  let n = min<=30?4 : min<=45?5 : min<=60?6 : 7;
+  /* Quem parou por falta de motivação volta com sessões um pouco mais curtas:
+     na volta, o que mais pesa é aparecer. */
+  if(p.jatreina==='parou' && p.motivoParada==='motivacao') n=Math.max(4,n-1);
   const usadosPlano=new Set();
   const sessoes=Object.entries(modeloDaDivisao(div)).map(([nome,vagas])=>{
     const usados=new Set(), lista=[];
@@ -2919,6 +2971,15 @@ function gerarSerieInicial(){
 function faseSerie(serie){
   const dias=Math.max(0,Math.floor((new Date(hoje())-new Date(serie.criada))/864e5));
   const semana=Math.floor(dias/7)+1;
+  if(retornoExperiente(S.perfil)){
+    const R = S.perfil.parado==='1a+' ? 2 : 1;
+    if(semana<=R) return {semana, series:2, rir:'3 a 4', nome:'Retomada',
+      texto:`${R===2?'Duas semanas':'Uma semana'} com duas séries leves por exercício. O músculo volta rápido, mas tendões e articulações levam mais tempo para se readaptar: segure a carga mesmo que pareça fácil.`};
+    if(semana<=R+3) return {semana, series:3, rir:'2 a 3', nome:'Reconstrução',
+      texto:'Três séries por exercício. A memória muscular faz a força voltar bem mais rápido que da primeira vez: suba a carga sempre que fechar o topo da faixa em todas as séries.'};
+    return {semana, series:3, rir:'1 a 2', nome:'Progressão',
+      texto:'Você deve estar perto de onde parou. Siga pela dupla progressão e, se quiser, volte para a divisão que fazia antes; o Coach ajuda nessa transição.'};
+  }
   return {
     semana,
     series: semana<=2?2:3,
@@ -2940,7 +3001,7 @@ function metaIniciante(nome, fase){
   else if(/dead bug|bird dog/i.test(nome)) reps='8 a 12 por lado';
   else if(e.g==='Panturrilha') reps='15 a 20';
   else if(e.t==='isolado') reps='12 a 15';
-  else reps='10 a 12';
+  else reps = retornoExperiente(S.perfil) ? '8 a 12' : '10 a 12';
   const desc = e.t==='composto' ? '90 s' : '60 s';
   return {series:fase.series, reps, rir:fase.rir, desc,
           texto:`${fase.series} × ${reps} · RIR ${fase.rir} · descanso ${desc}`};
@@ -2949,6 +3010,24 @@ function metaIniciante(nome, fase){
 /* Avisos que dependem do perfil: aparecem só para quem eles importam. */
 function avisosSerie(serie){
   const p=S.perfil, c=p.condicoes||[], av=[];
+  if(p.jatreina==='parou'){
+    const lesaoMarcada=c.some(k=>LESOES.some(l=>l.k===k));
+    if(p.motivoParada==='lesao') av.push(lesaoMarcada
+      ? {t:'w',x:'Como você parou por lesão, comece bem abaixo do que fazia antes nos exercícios que envolvem a região, e pare se a dor voltar.'}
+      : {t:'a',x:'Você contou que parou por lesão ou dor, mas não marcou nenhuma lesão. Se ainda incomoda, passe por um fisioterapeuta antes de voltar e marque a lesão em Você: o app passa a evitar os exercícios que costumam piorá-la.'});
+    if(p.motivoParada==='saude')
+      av.push({t:'a',x:'Como você parou por um problema de saúde, confirme com seu médico que está liberado para voltar antes da primeira sessão.'});
+    if(p.motivoParada==='motivacao')
+      av.push({t:'g',x:'A série está enxuta de propósito. Na volta, o que mais conta é aparecer: uma sessão curta feita vale mais que uma longa adiada.'});
+    if(p.motivoParada==='tempo')
+      av.push({t:'g',x:'As sessões cabem no tempo que você informou. Se a semana apertar, fazer só os três primeiros exercícios da sessão já mantém o ritmo.'});
+    if(retornoExperiente(p))
+      av.push({t:'g',x:'Quem já treinou recupera massa e força bem mais rápido que um iniciante, a chamada memória muscular. Por isso a série avança mais depressa e inclui exercícios livres. Só não volte direto às cargas de antes: comece em torno da metade e deixe a força guiar a subida.'});
+    else
+      av.push({t:'',x:'Como você treinou por pouco tempo antes de parar, a série segue o ritmo de quem está começando, só que com a vantagem de você já conhecer a academia.'});
+    if(p.parado==='1a+')
+      av.push({t:'w',x:'Depois de mais de um ano parado, tendões e articulações se readaptam mais devagar do que o músculo volta. Mesmo que a força venha rápido, segure a carga nas duas primeiras semanas.'});
+  }
   const D=DIVISOES[serie.divisao], nSess=D.seq.length, nd=+p.dias||0;
   if(!/Iniciante|Todos/.test(D.nivel))
     av.push({t:'w',x:`A ${D.nome} costuma servir melhor a quem já treina há algum tempo (nível ${D.nivel.toLowerCase()}). Montei a série para ela mesmo assim, com exercícios e volume de iniciante. Se a rotina pesar, Full body ou Upper / Lower são as opções mais tranquilas para começar.`});
@@ -2979,11 +3058,12 @@ function avisosSerie(serie){
    pessoa não voltar à estaca zero só porque trocou de divisão. */
 function assinaturaSerie(p){
   return JSON.stringify([p.divisao, minutosDisponiveis(p.tempo), [...(p.equip||[])].sort(),
-    [...(p.condicoes||[])].sort(), p.gestacao||'nao', (+p.idade)>=60]);
+    [...(p.condicoes||[])].sort(), p.gestacao||'nao', (+p.idade)>=60,
+    p.jatreina, p.expAntes||'', p.parado||'', p.motivoParada||'']);
 }
 function garantirSerie(){
   const p=S&&S.perfil;
-  if(!p || p.jatreina!=='nao') return null;
+  if(!p || !['nao','parou'].includes(p.jatreina)) return null;
   if(!DIVISOES[p.divisao]) p.divisao=divisaoIniciante(p.dias);
   const ass=assinaturaSerie(p);
   if(!S.serie || S.serie.assinatura!==ass){
@@ -3145,6 +3225,29 @@ function render(){
   window.scrollTo(0,0);
 }
 
+const OPC_RETORNO = {
+  expAntes:[['<6m','Menos de 6 meses'],['6m-2a','6 meses a 2 anos'],['2a+','Mais de 2 anos']],
+  parado:[['<3m','Menos de 3 meses'],['3-12m','3 a 12 meses'],['1a+','Mais de 1 ano']],
+  motivoParada:[['lesao','Lesão ou dor'],['saude','Problema de saúde'],['tempo','Falta de tempo'],
+    ['motivacao','Motivação ou rotina'],['mudanca','Mudança de cidade, academia ou trabalho'],['outro','Outro motivo']]
+};
+const rotuloRetorno=(campo,v)=>((OPC_RETORNO[campo]||[]).find(x=>x[0]===v)||[,v||'não informado'])[1];
+function BLOCO_RETORNO(d){
+  const grupo=(campo,label)=>`<div class="field"><label>${label}</label><div class="chips" id="${campo}">
+    ${OPC_RETORNO[campo].map(([v,n])=>`<button class="chip" data-v="${v}" aria-pressed="${d[campo]===v}">${n}</button>`).join('')}</div></div>`;
+  return `${grupo('expAntes','Por quanto tempo você treinou antes de parar?')}
+    ${grupo('parado','Há quanto tempo está sem treinar?')}
+    ${grupo('motivoParada','Por que você parou?')}
+    <div class="field"><label for="dias">Quantos dias por semana você consegue manter agora, de forma realista?</label><input id="dias" type="number" inputmode="numeric" value="${d.dias||''}"></div>
+    <div class="field"><label for="tempo">Quanto tempo por dia teria disponível?</label><input id="tempo" value="${esc(d.tempo||'')}" placeholder="ex.: 50 minutos"></div>
+    <div class="field"><label for="cardio">Faz alguma atividade física hoje?</label><input id="cardio" value="${esc(d.cardio||'')}" placeholder="ex.: caminhada aos domingos — ou 'nenhuma'"></div>
+    ${BLOCO_EQUIP(d)}
+    <div class="field"><label>Meta principal hoje</label><div class="chips" id="obj">
+      <button class="chip" data-v="cutting" aria-pressed="${d.objetivo==='cutting'}">Perder gordura</button>
+      <button class="chip" data-v="bulking" aria-pressed="${d.objetivo==='bulking'}">Ganhar massa</button>
+      <button class="chip" data-v="manutencao" aria-pressed="${d.objetivo==='manutencao'}">Manter ou recompor</button></div></div>`;
+}
+
 function BLOCO_EQUIP(d){
   const sel=d.equip||EQUIPAMENTOS.map(x=>x.k);
   return `<div class="field" id="equipCampo"><label>O que você tem disponível para treinar?</label>
@@ -3186,8 +3289,9 @@ function onboarding(){
       </div>
       <div class="field"><label>Você já treina atualmente?</label>
         <div class="chips" id="jatreina">
-          <button class="chip" data-v="sim" aria-pressed="${d.jatreina==='sim'}">Sim, já treino</button>
-          <button class="chip" data-v="nao" aria-pressed="${d.jatreina==='nao'}">Ainda não</button></div></div>
+          <button class="chip" data-v="sim" aria-pressed="${d.jatreina==='sim'}">Sim, treino</button>
+          <button class="chip" data-v="parou" aria-pressed="${d.jatreina==='parou'}">Já treinei, mas parei</button>
+          <button class="chip" data-v="nao" aria-pressed="${d.jatreina==='nao'}">Nunca treinei</button></div></div>
       <p class="small muted" style="margin:0">O sexo biológico entra só na fórmula de metabolismo basal, que tem constantes diferentes.</p>
       <button class="btn primary" id="next1">Continuar</button>
       <p class="small" id="err1" style="color:var(--alert);margin:0"></p>
@@ -3204,7 +3308,7 @@ function onboarding(){
   if(o.etapa===2){
     const treina=d.jatreina==='sim';
     view.innerHTML=bar+`<div class="card stack">
-      <div class="tiny">Bloco 2 — ${treina?'sua rotina atual':'seu ponto de partida'}</div>
+      <div class="tiny">Bloco 2 — ${treina?'sua rotina atual':d.jatreina==='parou'?'sua volta aos treinos':'seu ponto de partida'}</div>
       ${treina?`
         <div class="field"><label for="tempo">Há quanto tempo você treina?</label><input id="tempo" value="${esc(d.tempo||'')}" placeholder="ex.: 1 ano e meio"></div>
         <div class="field"><label>Meta principal hoje</label><div class="chips" id="obj">
@@ -3216,7 +3320,7 @@ function onboarding(){
         <div class="field"><label for="dias">Dias de treino por semana</label><input id="dias" type="number" inputmode="numeric" value="${d.dias||''}"></div>
         <div class="field"><label for="cardio">Faz cardio? Qual, com que frequência e por quanto tempo</label><input id="cardio" value="${esc(d.cardio||'')}" placeholder="ex.: esteira, 3x, 25 min — ou 'não faço'"></div>
         ${BLOCO_EQUIP(d)}
-      `:`
+      `: d.jatreina==='parou' ? BLOCO_RETORNO(d) : `
         <div class="field"><label for="dias">Quantos dias por semana você conseguiria manter de forma realista?</label><input id="dias" type="number" inputmode="numeric" value="${d.dias||''}"></div>
         <div class="field"><label for="tempo">Quanto tempo por dia teria disponível?</label><input id="tempo" value="${esc(d.tempo||'')}" placeholder="ex.: 50 minutos"></div>
         <div class="field"><label for="cardio">Já faz algum tipo de atividade física?</label><input id="cardio" value="${esc(d.cardio||'')}" placeholder="ex.: caminhada aos domingos — ou 'nenhuma'"></div>
@@ -3232,6 +3336,8 @@ function onboarding(){
     const g2=()=>{['tempo','dias','cardio'].forEach(k=>{const el=view.querySelector('#'+k); if(el)d[k]=el.value;});
       const dv=view.querySelector('#div'); if(dv)d.divisao=dv.value;};
     view.querySelector('#obj').onclick=e=>{const b=e.target.closest('.chip');if(!b)return;g2();d.objetivo=b.dataset.v;onboarding();};
+    ['expAntes','parado','motivoParada'].forEach(c=>{const el=view.querySelector('#'+c);
+      if(el) el.onclick=e=>{const b=e.target.closest('.chip');if(!b)return;g2();d[c]=b.dataset.v;onboarding();};});
     view.querySelector('#equipCampo').onclick=e=>{const b=e.target.closest('[data-eq]');if(!b)return;g2();
       d.equip=d.equip||EQUIPAMENTOS.map(x=>x.k);
       const k=b.dataset.eq;
@@ -3242,6 +3348,7 @@ function onboarding(){
     view.querySelector('#back2').onclick=()=>{g2();o.etapa=1;save();onboarding();};
     view.querySelector('#next2').onclick=()=>{ g2();
       if(!d.dias||!d.tempo||!d.objetivo||!d.cardio){ view.querySelector('#err2').textContent='Faltou responder alguma coisa aqui. Prefiro perguntar de novo a chutar.'; return; }
+      if(d.jatreina==='parou' && (!d.expAntes||!d.parado||!d.motivoParada)){ view.querySelector('#err2').textContent='Falta me contar um pouco da sua história com o treino: quanto tempo treinou, há quanto tempo parou e por quê.'; return; }
       if(!d.equip) d.equip=EQUIPAMENTOS.map(x=>x.k);
       if(!d.divisao){ const nd=+d.dias; d.divisao = nd>=6?'ppl6' : nd===5?'pplul' : nd===4?'upperlower' : 'fullbody'; }
       o.etapa=3; save(); onboarding(); };
@@ -3257,10 +3364,12 @@ function onboarding(){
       <div class="chips" id="gest">
         ${GESTACAO.map(x=>`<button class="chip" data-g="${x.k}" aria-pressed="${(d.gestacao||'nao')===x.k}">${x.n}</button>`).join('')}</div>
       <p class="small muted" style="margin:7px 0 0">Isso muda a meta calórica e faz o app sinalizar exercícios que pedem cautela. Pode marcar mais de uma vez ao longo do tempo, em Você.</p></div>`:''}
+    ${d.jatreina==='parou'&&d.motivoParada==='saude'?`<div class="note w small">Você contou que parou por um problema de saúde. Se ele tiver diagnóstico, marque abaixo: cada condição muda alguma coisa no treino ou na dieta.</div>`:''}
     <div class="field"><label>Alguma condição de saúde diagnosticada?</label>
       <div class="chips" id="cond">
         ${CONDICOES.filter(c=>c.tipo==='clinica').map(c=>`<button class="chip" data-c="${c.k}" aria-pressed="${(d.condicoes||[]).includes(c.k)}">${c.n}</button>`).join('')}</div>
       <p class="small muted" style="margin:7px 0 0">Cada uma muda alguma conduta de treino ou de cálculo.</p></div>
+    ${d.jatreina==='parou'&&d.motivoParada==='lesao'?`<div class="note w small">Você contou que parou por lesão ou dor. Marque abaixo qual foi, mesmo que já tenha melhorado: o app passa a evitar os exercícios que costumam fazer ela voltar.</div>`:''}
     <div class="field"><label>Alguma lesão, atual ou com histórico?</label>
       <div class="chips" id="cond2">
         ${CONDICOES.filter(c=>c.tipo==='lesao').map(c=>`<button class="chip" data-c="${c.k}" aria-pressed="${(d.condicoes||[]).includes(c.k)}">${c.n}</button>`).join('')}
@@ -3296,10 +3405,11 @@ function onboarding(){
     S.perfil={idade:+d.idade,sexo:d.sexo,peso:+d.peso,altura:+d.altura,jatreina:d.jatreina,tempo:d.tempo,
       dias:+d.dias,cardio:d.cardio,objetivo:d.objetivo,divisao:d.divisao,alim:d.alim,sono:d.sono,
       dificuldade:d.dificuldade,lesao:d.lesao,alergia:d.alergia,
+      ...(d.jatreina==='parou'?{expAntes:d.expAntes,parado:d.parado,motivoParada:d.motivoParada}:{}),
       equip:d.equip||EQUIPAMENTOS.map(x=>x.k), restricoes:d.restricoes||[],
       condicoes:d.condicoes||[], gestacao:d.gestacao||'nao', criado:hoje()};
     S.pesos.push({data:hoje(),peso:+d.peso});
-    if(S.perfil.jatreina==='nao'){ S.perfil.divisao=divisaoIniciante(S.perfil.dias); S.serie=null; garantirSerie(); S.tab='plano'; } else S.tab='hoje';
+    if(['nao','parou'].includes(S.perfil.jatreina)){ S.perfil.divisao=divisaoIniciante(S.perfil.dias); S.serie=null; garantirSerie(); S.tab='plano'; } else S.tab='hoje';
     save(); render(); };
 }
 
@@ -3328,6 +3438,7 @@ function telaHoje(){
     </div>
   </div>
 
+  ${m.retorno&&m.retorno.ativo?`<p class="small muted" style="margin:-4px 0 12px">Meta com ajuste de retorno, semana ${m.retorno.semana} de 6. O porquê está em Você.</p>`:''}
   <div class="card">
     <div class="between"><span class="tiny">Próxima sessão</span><span class="pill">${DIVISOES[p.divisao].nome}</span></div>
     <h2 style="margin:9px 0 8px">${proximaSessao()}</h2>
@@ -3336,7 +3447,7 @@ function telaHoje(){
       ${gruposDaSessao(proximaSessao()).map(g=>`<span class="chip mini" style="border-color:${corGrupo(g)};color:${corGrupo(g)}">${g}</span>`).join('')}</div>
     <button class="btn primary" data-go="treino">Registrar treino</button>`;
       const f=faseSerie(s);
-      return `<p class="small muted" style="margin:0 0 6px">Série inicial · semana ${f.semana} · ${f.nome}</p>
+      return `<p class="small muted" style="margin:0 0 6px">${rotuloSerie(true)} · semana ${f.semana} · ${f.nome}</p>
       ${sess.exercicios.map(x=>`<div class="item"><span class="small" style="font-weight:600">${x.nome}</span><span class="mono small muted">${f.series}×${metaIniciante(x.nome,f).reps}</span></div>`).join('')}
       <button class="btn primary" data-carregar="1" style="margin-top:12px">Começar o treino de hoje</button>
       <button class="btn ghost" data-go="plano" style="margin-top:8px">Ver a série completa</button>`;})()}
@@ -3380,7 +3491,7 @@ function telaTreino(){
   ${(()=>{const s=garantirSerie(); if(!s||rascunho.exercicios.length) return '';
     const sess=s.sessoes.find(x=>x.nome===rascunho.sessao); if(!sess) return '';
     return `<div class="card hero">
-      <span class="tiny">Sua série inicial</span>
+      <span class="tiny">Sua ${rotuloSerie()}</span>
       <h2 style="margin:8px 0 6px">${sess.nome}</h2>
       <p class="small muted" style="margin:0 0 12px">${sess.exercicios.length} exercícios, já com séries, repetições e descanso.</p>
       <button class="btn" data-carregar="1" style="background:#fff;color:#01265C">Carregar a série de hoje</button></div>`;})()}
@@ -3445,6 +3556,17 @@ function telaTreino(){
     rascunho.sessao=s[(i+1)%s.length].n; telaTreino();};
 }
 
+/* Gramas em pt-BR: uma casa decimal abaixo de 10 g, inteiro acima. */
+const fmtG = x => { const v = x<10 ? Math.round(x*10)/10 : Math.round(x); return String(v).replace('.',','); };
+const linhaMacros = (k,p,c,g) => `${Math.round(k)} kcal · P ${fmtG(p)} g · C ${fmtG(c)} g · G ${fmtG(g)} g`;
+function blocoMacros(a){
+  return `<div class="macros" aria-label="Valores por 100 gramas">
+    <div class="mac k"><b>${Math.round(a.k)}</b><span>kcal</span></div>
+    <div class="mac p"><b>${fmtG(a.p)} g</b><span>proteína</span></div>
+    <div class="mac c"><b>${fmtG(a.c)} g</b><span>carboidrato</span></div>
+    <div class="mac g"><b>${fmtG(a.g)} g</b><span>gordura</span></div></div>`;
+}
+
 /* ---- COMIDA ------------------------------------------------------------ */
 function telaComida(){
   const m=metasDoDia(), t=totalDia(hoje()), q=telaComida.q||'';
@@ -3473,27 +3595,37 @@ function telaComida(){
     ${ocultos?`<p class="small muted" style="margin:11px 0 0">${ocultos} itens ocultos pelas suas restrições (${rest.map(k=>RESTRICOES.find(r=>r.k===k).n.toLowerCase()).join(', ')}). <button class="chip mini" id="vertudo" style="vertical-align:middle">mostrar tudo</button></p>`:''}
     ${ignorar?`<p class="small muted" style="margin:11px 0 0">Mostrando a base inteira, sem filtrar restrições. <button class="chip mini" id="vertudo" style="vertical-align:middle">voltar a filtrar</button></p>`:''}
     ${!q&&!cat?`<p class="small muted" style="margin:12px 0 0">Digite acima ou escolha uma categoria. ${universo.length} itens disponíveis para o seu perfil.</p>`:''}
-    ${res.map(a=>{const md=medidasDe(a.n); return `<div style="padding:12px 0;border-bottom:1px solid var(--line2)">
+    ${res.map((a,ia)=>{const md=medidasDe(a.n); return `<div class="alim">
       <div class="between"><div style="min-width:0"><div style="font-weight:600">${a.n}</div>
-        <div class="small muted mono">${a.k} kcal · P${a.p} C${a.c} G${a.g} /100g</div></div>
-        <div class="row" style="flex:0 0 auto"><input type="number" inputmode="numeric" placeholder="g" style="width:68px" data-gram="${esc(a.n)}">
-        <button class="btn small primary" data-eat="${esc(a.n)}">+</button></div></div>
-      ${md.length?`<div class="chips" style="margin-top:9px">${md.map(([nome,g])=>
-        `<button class="chip mini g" data-med="${esc(a.n)}" data-g="${g}">1 ${nome} · ${g} g</button>`).join('')}</div>`:''}
+        <div class="small muted" style="margin-top:1px">${a.cat} · valores por 100 g</div></div>
+        <div class="row" style="flex:0 0 auto"><input type="number" inputmode="decimal" placeholder="g" style="width:68px" data-gram="${esc(a.n)}" data-ia="${ia}" aria-label="Gramas de ${esc(a.n)}">
+        <button class="btn small primary" data-eat="${esc(a.n)}" aria-label="Adicionar ${esc(a.n)}">+</button></div></div>
+      ${blocoMacros(a)}
+      <div class="small mono prev" data-prev="${ia}"></div>
+      ${md.length?`<div class="chips" style="margin-top:10px">${md.map(([nome,g])=>{const f=g/100;
+        return `<button class="chip mini g medida" data-med="${esc(a.n)}" data-g="${g}"><span>1 ${nome} · ${fmtG(g)} g</span><small>${linhaMacros(a.k*f,a.p*f,a.c*f,a.g*f)}</small></button>`;}).join('')}</div>`:''}
     </div>`;}).join('')}
   </div>
   <h2 style="margin:22px 0 11px">Registrado hoje</h2>
   ${itens.length?`<div class="card">${itens.map((i,idx)=>`<div class="item">
       <div><div class="small" style="font-weight:600">${i.nome}</div><div class="tiny">${i.rotulo||i.gram+' g'}</div></div>
       <div class="row"><div style="text-align:right"><div class="mono small">${Math.round(i.k)} kcal</div>
-      <div class="tiny">P${Math.round(i.p)} C${Math.round(i.c)} G${Math.round(i.g)}</div></div>
+      <div class="small muted mono">P ${fmtG(i.p)} g · C ${fmtG(i.c)} g · G ${fmtG(i.g)} g</div></div>
       <button class="btn small ghost" data-rm="${idx}" aria-label="remover">×</button></div></div>`).join('')}
-    <hr><div class="between"><strong class="small">Total</strong><span class="mono" style="font-weight:600">${t.k} kcal</span></div></div>`
+    <hr><div class="between"><strong class="small">Total</strong><span class="mono" style="font-weight:600">${t.k} kcal</span></div>
+    <div class="small muted mono" style="text-align:right;margin-top:3px">P ${t.p} g · C ${t.c} g · G ${t.g} g</div></div>`
     :'<p class="small muted">Nada registrado ainda hoje.</p>'}
   <p class="small muted">Refeição composta ou fora de casa, difícil de somar item a item? Descreva para o Coach — ele estima e explica o raciocínio.</p>`;
   const el=view.querySelector('#qa');
   el.oninput=()=>{telaComida.q=el.value;const p=el.selectionStart;telaComida();const n=view.querySelector('#qa');n.focus();n.setSelectionRange(p,p);};
   const vt=view.querySelector('#vertudo'); if(vt) vt.onclick=()=>{telaComida.tudo=!ignorar;telaComida();};
+  /* Prévia dos macros enquanto a pessoa digita a quantidade; Enter adiciona. */
+  view.querySelectorAll('[data-gram]').forEach(inp=>{
+    const a=res[+inp.dataset.ia], out=view.querySelector(`[data-prev="${inp.dataset.ia}"]`);
+    inp.oninput=()=>{ const g=parseFloat(String(inp.value).replace(',','.'));
+      out.textContent = g>0 ? `${fmtG(g)} g = ${linhaMacros(a.k*g/100,a.p*g/100,a.c*g/100,a.g*g/100)}` : ''; };
+    inp.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); view.querySelector(`[data-eat="${CSS.escape(a.n)}"]`).click(); } };
+  });
 }
 
 /* ---- COACH ------------------------------------------------------------- */
@@ -3502,19 +3634,21 @@ function contexto(){
   const ult=S.treinos.slice(-3).map(x=>`${fmtData(x.data)} — ${x.sessao}: ${x.exercicios.map(e=>e.nome+' '+e.series.map(s=>s.reps+'x'+s.carga+'kg').join('/')).join(' | ')}`).join('\n')||'nenhum treino registrado ainda';
   const D=DIVISOES[p.divisao];
   return `CONTEXTO (dados reais do app — use como verdade, não recalcule)
-Perfil: ${p.idade} anos, ${p.sexo==='M'?'homem':'mulher'}, ${p.peso} kg, ${p.altura} cm. ${p.jatreina==='sim'?'Treina há '+p.tempo:'Não treinava antes; disponibilidade de '+p.tempo}. ${p.dias} dias por semana. Cardio: ${p.cardio}.
+Perfil: ${p.idade} anos, ${p.sexo==='M'?'homem':'mulher'}, ${p.peso} kg, ${p.altura} cm. ${p.jatreina==='sim'?'Treina há '+p.tempo
+  : p.jatreina==='parou' ? `Já treinou antes (${rotuloRetorno('expAntes',p.expAntes).toLowerCase()}) e está sem treinar há ${rotuloRetorno('parado',p.parado).toLowerCase()}; parou por: ${rotuloRetorno('motivoParada',p.motivoParada).toLowerCase()}. Trate como retorno: progride mais rápido que um iniciante por memória muscular, mas com cautela com tendões e articulações nas primeiras semanas. Disponibilidade de ${p.tempo}`
+  : 'Não treinava antes; disponibilidade de '+p.tempo}. ${p.dias} dias por semana. Cardio: ${p.cardio}.
 Objetivo: ${p.objetivo}. Divisão: ${D.nome} (${D.dias} dias, frequência ${D.freq}). Sessões: ${D.seq.map(s=>s.n).join(' / ')}. Próxima prevista: ${proximaSessao()}.
 Situação: ${({gestante:'GESTANTE',posparto:'PÓS-PARTO recente',amamentando:'AMAMENTANDO'})[p.gestacao]||'nenhuma condição gestacional'}. Condições clínicas: ${(p.condicoes||[]).filter(k=>CONDICOES.find(c=>c.k===k)?.tipo==='clinica').map(k=>CONDICOES.find(c=>c.k===k).n).join(', ')||'nenhuma'}. Lesões declaradas: ${(p.condicoes||[]).filter(k=>CONDICOES.find(c=>c.k===k)?.tipo==='lesao').map(k=>CONDICOES.find(c=>c.k===k).n).join(', ')||'nenhuma'}. Nunca prescreva treino por cima de lesão: sugira substituição pelo mesmo padrão de movimento e reforce avaliação de fisioterapeuta.
 Equipamento disponível: ${(p.equip||[]).length?(p.equip.join(', ')+', além de peso corporal'):'apenas peso corporal'}. Não sugira exercício que exija equipamento fora dessa lista.
 Restrições alimentares: ${(p.restricoes||[]).length?p.restricoes.map(k=>RESTRICOES.find(r=>r.k===k).n).join(', '):'nenhuma declarada'}. Alergias e intolerâncias: ${p.alergia||'não informado'}. Respeite isso em qualquer sugestão de refeição.
 Alimentação relatada: ${p.alim}. Sono e disposição: ${p.sono}. Maior dificuldade: ${p.dificuldade}. Restrições ou lesões: ${p.lesao}.
-${guardaNutricional().trava?'ATENÇÃO — GUARDA ATIVA: '+guardaNutricional().txt+' Não sugira déficit calórico, meta de emagrecimento nem plano restritivo nesta conversa, mesmo se pedido.\n':''}Cálculos do app: TMB ${m.tmb} kcal, TDEE ${m.tdee} kcal, meta ${m.kcal} kcal, macros alvo P ${m.prot} g / C ${m.carb} g / G ${m.gord} g.
+${guardaNutricional().trava?'ATENÇÃO — GUARDA ATIVA: '+guardaNutricional().txt+' Não sugira déficit calórico, meta de emagrecimento nem plano restritivo nesta conversa, mesmo se pedido.\n':''}Cálculos do app: TMB ${m.tmb} kcal, TDEE ${m.tdee} kcal, meta ${m.kcal} kcal, macros alvo P ${m.prot} g / C ${m.carb} g / G ${m.gord} g.${m.retorno&&m.retorno.ativo?' Ajuste de dieta de retorno ativo (semana '+m.retorno.semana+' de 6): déficit ou superávit menores que o padrão e proteína mais alta, para aproveitar a memória muscular. Não proponha cortes mais agressivos nesse período.':''}
 Consumido hoje: ${t.k} kcal (P ${t.p} / C ${t.c} / G ${t.g}).
 Peso: ${S.pesos.slice(-5).map(x=>fmtData(x.data)+' '+x.peso+'kg').join(', ')||'—'}.
 Volume 7 dias por grupo: ${Object.entries(vol).filter(([,n])=>n>0).map(([g,n])=>g+' '+n.toFixed(1)).join(', ')||'—'}.
-${(()=>{const s=S.serie; if(!s||p.jatreina!=='nao') return '';
+${(()=>{const s=S.serie; if(!s||!['nao','parou'].includes(p.jatreina)) return '';
   const f=faseSerie(s);
-  return 'Série inicial sugerida pelo app para a divisão '+DIVISOES[s.divisao].nome+' (usuário iniciante, semana '+f.semana+', fase '+f.nome+', '+f.series+' séries por exercício, RIR '+f.rir+'): '
+  return rotuloSerie(true)+' sugerida pelo app para a divisão '+DIVISOES[s.divisao].nome+' ('+(p.jatreina==='parou'?'usuário que já treinou e está voltando':'usuário iniciante')+', semana '+f.semana+', fase '+f.nome+', '+f.series+' séries por exercício, RIR '+f.rir+'): '
     + s.sessoes.map(x=>x.nome+': '+x.exercicios.map(e=>e.nome).join(', ')).join(' | ')
     + '. Ela foi montada pelo app com base no equipamento, nas lesões e no tempo informados; ao sugerir trocas, mantenha o mesmo padrão de movimento e o nível iniciante.\n';})()}Últimos treinos:
 ${ult}`;
@@ -3565,7 +3699,7 @@ function htmlSerieInicial(){
   const D=DIVISOES[s.divisao], houveTroca=s.sessoes.some(x=>x.exercicios.some(e=>(e.trocados||[]).length));
   const f=faseSerie(s);
   return `<div class="card hero">
-    <div class="between"><span class="tiny">Sua série inicial</span><span class="mono small muted">semana ${f.semana}</span></div>
+    <div class="between"><span class="tiny">Sua ${rotuloSerie()}</span><span class="mono small muted">semana ${f.semana}</span></div>
     <h2 style="margin:8px 0 6px">${f.nome}</h2>
     <p class="small" style="margin:0;opacity:.9">${f.texto}</p>
   </div>
@@ -3595,7 +3729,7 @@ function telaPlano(){
   const p=S.perfil, D=DIVISOES[(garantirSerie(), S.perfil.divisao)];
   view.innerHTML=`
   <h1>Plano</h1>
-  <p class="small muted" style="margin:5px 0 17px">${p.jatreina==='nao'?'Sua série inicial, sua divisão e':'Sua divisão e'} todo o material de referência do IdealShape.</p>
+  <p class="small muted" style="margin:5px 0 17px">${['nao','parou'].includes(p.jatreina)?'Sua '+rotuloSerie()+', sua divisão e':'Sua divisão e'} todo o material de referência do IdealShape.</p>
   ${htmlSerieInicial()}
 
   <div class="card">
@@ -3665,6 +3799,7 @@ function telaVoce(){
       <div><div class="bignum">${m.tdee}</div><div class="tiny">TDEE</div></div>
       <div><div class="bignum" style="color:var(--green-d)">${m.kcal}</div><div class="tiny">Meta</div></div></div>
     ${(()=>{const g=guardaNutricional(); return g.trava?`<div class="note a small" style="margin-top:13px">${g.txt}</div>`:'';})()}
+    ${m.retorno&&m.retorno.ativo?`<div class="note g small" style="margin-top:13px"><strong>Ajuste de retorno · semana ${m.retorno.semana} de 6.</strong> ${textoAjusteRetorno(m)}</div>`:''}
     <p class="small muted" style="margin:13px 0 0">TMB é o gasto em repouso absoluto, pela equação de Mifflin-St Jeor. O TDEE soma o gasto do dia inteiro usando o fator ${F.fator(p.dias)}, referente a ${p.dias} dias de treino. A meta aplica ${m.delta<0?`déficit de ${Math.abs(m.delta)} kcal, ou ${Math.abs(m.delta/m.tdee*100).toFixed(0)}% do seu gasto`:m.delta>0?`superávit de ${m.delta} kcal`:'manutenção'}${m.extra?`, mais ${m.extra} kcal pela demanda ${p.gestacao==='amamentando'?'da amamentação':'gestacional'}`:''}. O corte é proporcional ao gasto, e não um valor fixo: 400 kcal representam pouco para quem gasta 3000 e muito para quem gasta 1500. É estimativa: ajuste depois de 2 a 3 semanas observando o peso real.</p>
   </div>
   <div class="card">
