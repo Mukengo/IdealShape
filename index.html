@@ -1678,6 +1678,8 @@ const LESOES = [
   d:'Dor cervical piora com trapézio superior sobrecarregado e com pescoço puxado nos abdominais. Evite encolhimento pesado e remada alta, não puxe a cabeça com as mãos no abdominal, e prefira desenvolvimento apoiado. Trabalho de deltoide posterior e trapézio médio, como face pull, costuma aliviar.'}
 ];
 LESOES.forEach(l=>{ l.tipo='lesao'; CONDICOES.push(l); });
+const tipoCond=k=>CONDICOES.find(c=>c.k===k)?.tipo;
+const temCondTipo=(lista,tipo)=>(lista||[]).some(k=>tipoCond(k)===tipo);
 
 /* Verifica se um exercício conflita com uma lesão declarada. */
 function conflitaLesao(e,l){
@@ -3367,13 +3369,14 @@ function onboarding(){
     ${d.jatreina==='parou'&&d.motivoParada==='saude'?`<div class="note w small">Você contou que parou por um problema de saúde. Se ele tiver diagnóstico, marque abaixo: cada condição muda alguma coisa no treino ou na dieta.</div>`:''}
     <div class="field"><label>Alguma condição de saúde diagnosticada?</label>
       <div class="chips" id="cond">
-        ${CONDICOES.filter(c=>c.tipo==='clinica').map(c=>`<button class="chip" data-c="${c.k}" aria-pressed="${(d.condicoes||[]).includes(c.k)}">${c.n}</button>`).join('')}</div>
+        ${CONDICOES.filter(c=>c.tipo==='clinica').map(c=>`<button class="chip" data-c="${c.k}" aria-pressed="${(d.condicoes||[]).includes(c.k)}">${c.n}</button>`).join('')}
+        <button class="chip g" data-c="" data-tipo="clinica" aria-pressed="${!temCondTipo(d.condicoes,'clinica')}">Nenhuma</button></div>
       <p class="small muted" style="margin:7px 0 0">Cada uma muda alguma conduta de treino ou de cálculo.</p></div>
     ${d.jatreina==='parou'&&d.motivoParada==='lesao'?`<div class="note w small">Você contou que parou por lesão ou dor. Marque abaixo qual foi, mesmo que já tenha melhorado: o app passa a evitar os exercícios que costumam fazer ela voltar.</div>`:''}
     <div class="field"><label>Alguma lesão, atual ou com histórico?</label>
       <div class="chips" id="cond2">
         ${CONDICOES.filter(c=>c.tipo==='lesao').map(c=>`<button class="chip" data-c="${c.k}" aria-pressed="${(d.condicoes||[]).includes(c.k)}">${c.n}</button>`).join('')}
-        <button class="chip g" data-c="" aria-pressed="${!(d.condicoes||[]).length}">Nenhuma</button></div>
+        <button class="chip g" data-c="" data-tipo="lesao" aria-pressed="${!temCondTipo(d.condicoes,'lesao')}">Nenhuma</button></div>
       <p class="small muted" style="margin:7px 0 0">O app passa a avisar nos exercícios que costumam agravar cada uma, e sugere por onde substituir. Isso não substitui fisioterapeuta.</p></div>
     <div class="field"><label>Alguma restrição alimentar?</label>
       <div class="chips" id="rest">
@@ -3391,7 +3394,8 @@ function onboarding(){
   if(gz) gz.onclick=e=>{const b=e.target.closest('.chip'); if(!b)return; g3(); d.gestacao=b.dataset.g; onboarding();};
   const marcarCond=e=>{const b=e.target.closest('.chip'); if(!b)return; g3();
     const k=b.dataset.c, at=d.condicoes||[];
-    d.condicoes = !k ? [] : at.includes(k) ? at.filter(x=>x!==k) : [...at,k];
+    /* "Nenhuma" limpa só a própria pergunta: marcar "nenhuma lesão" não apaga uma condição clínica, e vice-versa */
+    d.condicoes = !k ? at.filter(x=>tipoCond(x)!==b.dataset.tipo) : at.includes(k) ? at.filter(x=>x!==k) : [...at,k];
     onboarding();};
   view.querySelector('#cond').onclick=marcarCond;
   view.querySelector('#cond2').onclick=marcarCond;
